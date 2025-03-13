@@ -2,6 +2,7 @@ from math import sin, cos
 import numpy as np
 from matplotlib.figure import Figure
 from helper_fcns.utils import EndEffector, rotm_to_euler
+from helper_fcns.utils import dh_to_matrix
 
 PI = 3.1415926535897932384
 np.set_printoptions(precision=3)
@@ -250,7 +251,19 @@ class TwoDOFRobot():
         
         ########################################
 
-        # insert your code here
+        if not radians:
+            # Convert degrees to radians if the input is in degrees
+            self.theta[0] = np.deg2rad(theta[0])
+            self.theta[1] = np.deg2rad(theta[1])
+        else:
+            self.theta = theta
+
+        # Ensure that the joint angles respect the joint limits
+        for i, th in enumerate(self.theta):
+            self.theta[i] = np.clip(th, self.theta_limits[i][0], self.theta_limits[i][1])
+
+        # Update the robot configuration (i.e., the positions of the joints and end effector)
+        self.calc_robot_points()
 
         ########################################
 
@@ -261,6 +274,7 @@ class TwoDOFRobot():
 
     def calc_inverse_kinematics(self, EE: EndEffector, soln=0):
         """
+        2-dof arm
         Calculates the inverse kinematics (IK) for a given end effector position.
 
         Args:
@@ -270,11 +284,34 @@ class TwoDOFRobot():
         x, y = EE.x, EE.y
         l1, l2 = self.l1, self.l2
 
+        # Compute L (distance from base to EE)
+        L = np.sqrt(x**2 + y**2)
+
+        # Compute cos(theta2) using the law of cosines
+        cos_theta2 = (L - l1**2 - l2**2) / (2 * l1 * l2)
+        print(cos_theta2)
+
+        # Clamp the value to avoid domain errors in arccos
+        # cos_theta2 = np.clip(cos_theta2, -1, 1)
+        theta2 = np.arccos(cos_theta2)
+
+        # Choose the solution branch
+        if soln == 1:
+            theta2 = -theta2  # Alternate solution
+
+        # Compute theta1 using the sine rule
+        alpha = np.arctan2(y, x)
+        beta = np.arctan2(l2 * np.sin(theta2), l1 + l2 * np.cos(theta2))
+        theta1 = alpha - beta
+
+        self.theta[0] = theta1
+        self.theta[1] = theta2
+
+        print(f"Theta1: {np.degrees(theta1)} degrees")
+        print(f"Theta2: {np.degrees(theta2)} degrees")
+
         ########################################
 
-        # insert your code here
-
-        ########################################
         
         # Calculate robot points based on the updated joint angles
         self.calc_robot_points()
@@ -300,7 +337,6 @@ class TwoDOFRobot():
 
         self.calc_robot_points()
 
-
     def calc_velocity_kinematics(self, vel: list):
         """
         Calculates the velocity kinematics for the robot based on the given velocity input.
@@ -309,17 +345,90 @@ class TwoDOFRobot():
             vel (list): The velocity vector for the end effector [vx, vy].
         """
         
-        ########################################
+        # move robot slightly out of zeros singularity
+        if all(th == 0.0 for th in self.theta):
+            self.theta = [self.theta[i] + np.random.rand()*0.02 for i in range(self.num_dof)]
+        
+        # Calculate joint velocities using the inverse Jacobian
+        vel = vel[:2]  # Consider only the first two components of the velocity
+        thetadot = self.inverse_jacobian() @ vel
 
-        # insert your code here
+        # print(f'thetadot: {thetadot}')
 
-        ########################################
+        # (Corrective measure) Ensure joint velocities stay within limits
+        # self.thetadot_limits = [[-2*PI, 2*PI], [-2*PI, 2*PI]]
+        self.thetadot_limits = [[-PI, PI], [-PI, PI]]
+        thetadot = np.clip(thetadot, [limit[0] for limit in self.thetadot_limits], [limit[1] for limit in self.thetadot_limits])
+        
+        # print(f'Limited thetadot: {thetadot}')
+
+
+        # Update the joint angles based on the velocity
+        self.theta[0] += 0.02 * thetadot[0]
+        self.theta[1] += 0.02 * thetadot[1]
+
+        # Ensure joint angles stay within limits
+        self.theta = np.clip(self.theta, [limit[0] for limit in self.theta_limits], [limit[1] for limit in self.theta_limits])
 
         # Update robot points based on the new joint angles
         self.calc_robot_points()
 
 
+    def jacobian(self, theta: list = None):
+        """
+        Returns the Jacobian matrix for the robot. If theta is not provided, 
+        the function will use the object's internal theta attribute.
+
+        Args:
+            theta (list, optional): The joint angles for the robot. Defaults to self.theta.
+
+        Returns:
+            np.ndarray: The Jacobian matrix (2x2).
+        """
+        # Use default values if arguments are not provided
+        if theta is None:
+            theta = self.theta
+        
+        return np.array([
+            [-self.l1 * sin(theta[0]) - self.l2 * sin(theta[0] + theta[1]), -self.l2 * sin(theta[0] + theta[1])],
+            [self.l1 * cos(theta[0]) + self.l2 * cos(theta[0] + theta[1]), self.l2 * cos(theta[0] + theta[1])]
+        ])
+
+
+    def inverse_jacobian(self):
+        """
+        Returns the inverse of the Jacobian matrix.
+
+        Returns:
+            np.ndarray: The inverse Jacobian matrix.
+        """
+        J = self.jacobian()
+        print(f'Determinant of J: {np.linalg.det(J)}')
+        # return np.linalg.inv(self.jacobian())
+        return np.linalg.pinv(self.jacobian())
+     
     
+    def solve_forward_kinematics(self, theta: list, radians=False):
+        """
+        Evaluates the forward kinematics based on the joint angles.
+
+        Args:
+            theta (list): The joint angles [theta_1, theta_2].
+            radians (bool, optional): Whether the input angles are in radians (True) or degrees (False).
+                                      Defaults to False (degrees).
+
+        Returns:
+            list: The end effector position [x, y].
+        """
+        if not radians:
+            theta[0] = np.deg2rad(theta[0])
+            theta[1] = np.deg2rad(theta[1])
+
+        # Compute forward kinematics
+        x = self.l1 * cos(theta[0]) + self.l2 * cos(theta[0] + theta[1])
+        y = self.l1 * sin(theta[0]) + self.l2 * sin(theta[0] + theta[1])
+
+        return [x, y]
 
     def calc_robot_points(self):
         """
@@ -327,29 +436,13 @@ class TwoDOFRobot():
 
         Updates the `points` list, storing the coordinates of the base, shoulder, elbow, and end effector.
         """
-
-        
-
-        ########################################
-
-        # Replace the placeholder values with your code
-
-
-        placeholder_value = [0.0, 0.0, 0.0]
-
-
         # Base position
-        self.points[0] = placeholder_value
+        self.points[0] = [0.0, 0.0, 0.0]
         # Shoulder joint
-        self.points[1] = placeholder_value
+        self.points[1] = [self.l1 * cos(self.theta[0]), self.l1 * sin(self.theta[0]), 0.0]
         # Elbow joint
-        self.points[2] = placeholder_value
-
-        ########################################
-
-
-
-
+        self.points[2] = [self.l1 * cos(self.theta[0]) + self.l2 * cos(self.theta[0] + self.theta[1]),
+                          self.l1 * sin(self.theta[0]) + self.l2 * sin(self.theta[0] + self.theta[1]), 0.0]
 
         # Update end effector position
         self.ee.x = self.points[2][0]
@@ -521,7 +614,7 @@ class FiveDOFRobot:
     def __init__(self):
         """Initialize the robot parameters and joint limits."""
         # Link lengths
-        self.l1, self.l2, self.l3, self.l4, self.l5 = 0.30, 0.15, 0.18, 0.15, 0.12
+        self.l1, self.l2, self.l3, self.l4, self.l5 = 15.5, 9.9, 9.5, 5.5, 10.5
         
         # Joint angles (initialized to zero)
         self.theta = [0, 0, 0, 0, 0]
@@ -555,18 +648,40 @@ class FiveDOFRobot:
     
     def calc_forward_kinematics(self, theta: list, radians=False):
         """
-        Calculate forward kinematics based on the provided joint angles.
-        
-        Args:
-            theta: List of joint angles (in degrees or radians).
-            radians: Boolean flag to indicate if input angles are in radians.
+         Calculate forward kinematics based on the provided joint angles.
+
+            Args:
+                theta: List of joint angles (in degrees or radians).
+                radians: Boolean flag to indicate if input angles are in radians.
         """
-        ########################################
 
-        # insert your code here
+        # Want to use radians to control the simulation since all the functions are written to work with radian values
+        if not radians:
+            theta = np.radians(theta)
 
-        ########################################
-        
+        # DH Table, derivation shown above
+        self.DH = [
+            [theta[0], self.l1, 0, -np.pi/2],
+            [theta[1] - np.pi/2, 0, self.l2, np.pi],
+            [theta[2], 0, self.l3, np.pi],
+            [theta[3] + np.pi/2, 0, 0, np.pi/2],
+            [theta[4], self.l4 + self.l5, 0, 0],
+        ]
+
+        # This vertically stacks the transformation matricies from the DH table
+        # self.T represents the transformation required to go from joint i-1 to joint i
+        self.T = np.stack(
+            [
+                dh_to_matrix(self.DH[0]),
+                dh_to_matrix(self.DH[1]),
+                dh_to_matrix(self.DH[2]),
+                dh_to_matrix(self.DH[3]),
+                dh_to_matrix(self.DH[4]),
+            ],
+            axis=0,
+        )
+
+    
         # Calculate robot points (positions of joints)
         self.calc_robot_points()
 
@@ -604,15 +719,35 @@ class FiveDOFRobot:
         Args:
             vel: Desired end-effector velocity (3x1 vector).
         """
-        ########################################
 
-        # insert your code here
+        # Computes the total transformation matricies to get from frame 0 to frame i
+        T_cumulative = [np.eye(4)]
+        for i in range(self.num_dof):
+            T_cumulative.append(T_cumulative[-1] @ self.T[i])
 
-        ########################################
+        # Extracts the translational component to get from frame 0 to the end-effector frame
+        d = T_cumulative[-1] @ np.vstack([0, 0, 0, 1])
 
-        # Recompute robot points based on updated joint angles
+        # Calculates the jacobian by crossing the distance to the end-effector and the z component of rotation
+        for i in range(0, 5):
+            T_i = T_cumulative[i]
+            z = T_i @ np.vstack([0, 0, 1, 0])
+            d1 = T_i @ np.vstack([0, 0, 0, 1])
+            r = np.array([d[0] - d1[0], d[1] - d1[1], d[2] - d1[2]]).flatten()
+            self.J[i] = np.cross(z[:3].flatten(), r.flatten())
+            
+        # Uses psuedoinverse to calculate inverse of jacobian
+        # This is done since the jacobian is not square
+        J_inv = np.linalg.pinv(self.J)
+        # Multiplies the velocity vector by the inverse jacobian to get angular velocities of each joint
+        theta_dot = np.dot(np.array(vel), J_inv)
+        
+        # Control cycle time step
+        dt = 0.01
+        # Calculates next theta values by multiplying angular velocities by time step
+        self.theta = self.theta + (theta_dot * dt)
+        # Calls forward kinematics with new theta values
         self.calc_forward_kinematics(self.theta, radians=True)
-
 
     def calc_robot_points(self):
         """ Calculates the main arm points using the current joint angles """
