@@ -50,10 +50,12 @@ class Robot:
             self.robot = FiveDOFRobot()
         
         self.origin = [0., 0., 0.]
-        self.axes_length = 0.075
+        self.axes_length = 0.04
         self.point_x, self.point_y, self.point_z = [], [], []
+        self.waypoint_x, self.waypoint_y, self.waypoint_z = [], [], []
+        self.waypoint_rotx, self.waypoint_roty, self.waypoint_rotz = [], [], []
         self.show_animation = show_animation
-        self.plot_limits = [0.75, 0.75, 1.0]
+        self.plot_limits = [0.65, 0.65, 0.8]
 
         if self.show_animation:
             self.fig = Figure(figsize=(12, 10), dpi=100)
@@ -147,6 +149,27 @@ class Robot:
                       [point[2], 0.0], 'b--', linewidth=line_width)         # Z line
 
 
+    def plot_waypoints(self):
+        """
+        Plots the waypoints in the 3D visualization
+        """
+        # draw the points
+        self.sub1.plot(self.waypoint_x, self.waypoint_y, self.waypoint_z, 'or', markersize=8)
+
+
+    def update_waypoints(self, waypoints: list):
+        """
+        Updates the waypoints into a member variable
+        """
+        for i in range(len(waypoints)):
+            self.waypoint_x.append(waypoints[i][0])
+            self.waypoint_y.append(waypoints[i][1])
+            self.waypoint_z.append(waypoints[i][2])
+            # self.waypoint_rotx.append(waypoints[i][3])
+            # self.waypoint_roty.append(waypoints[i][4])
+            # self.waypoint_rotz.append(waypoints[i][5])
+
+
     def plot_3D(self):
         """
         Plots the 3D visualization of the robot, including the robot's links, end-effector, and reference frames.
@@ -168,6 +191,10 @@ class Robot:
             self.point_y.append(self.robot.points[i][1])
             self.point_z.append(self.robot.points[i][2])
         self.sub1.plot(self.point_x, self.point_y, self.point_z, marker='o', markerfacecolor='m', markersize=12)
+
+
+        # draw the waypoints
+        self.plot_waypoints()
 
         # draw the EE
         self.sub1.plot(EE.x, EE.y, EE.z, 'bo')
@@ -205,6 +232,8 @@ class Robot:
         self.sub1.set_zlim(0, self.plot_limits[2])
         self.sub1.set_xlabel('x [m]')
         self.sub1.set_ylabel('y [m]')
+
+
 
 
 
@@ -773,7 +802,7 @@ class FiveDOFRobot:
         
         # Extract and assign the RPY (roll, pitch, yaw) from the rotation matrix
         rpy = rotm_to_euler(self.T_ee[:3, :3])
-        self.ee.rotx, self.ee.roty, self.ee.rotz = rpy[2], rpy[1], rpy[0]
+        self.ee.rotx, self.ee.roty, self.ee.rotz = rpy[0], rpy[1], rpy[2]
 
         # Calculate the EE axes in space (in the base frame)
         self.EE = [self.ee.x, self.ee.y, self.ee.z]
